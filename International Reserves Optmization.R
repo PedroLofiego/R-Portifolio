@@ -1,7 +1,7 @@
-#rotina otimização de carteira
-#Autor: Pedro &amp; Vivi
+
+#Autor: Pedro Samp;
 #data 23/09/2020
-#entrada de dados: Preços Mexico
+
 #Pacotes
 # install.packages(&quot;quadprog&quot;)
 # install.packages(&quot;PerformanceAnalytics&quot;)
