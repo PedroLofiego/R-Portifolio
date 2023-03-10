@@ -1,0 +1,411 @@
+codigo
+#rotina otimização de carteira
+#Autor:
+#data 23/09/2020
+#entrada de dados: Preços
+
+#Pacotes
+#install.packages("quadprog")
+# install.packages("PerformanceAnalytics")
+# install.packages("IntroCompFinR", repos="http://R-Forge.R-project.org")
+# install.packages('mnormt')
+# install.packages('fAssets')
+# install.packages("fPortfolio")
+#install.packages("tidyquant")
+#install.packages("dplyr")
+# install.packages('DEoptmin')
+# install.packages('ROI.plugin.glpk')
+# install.packages('ROI.plugin.quadprog')
+# install.packages('mvtnorm')
+#install.packages("PortfolioAnalytics", repos="http://R-Forge.R-project.org")
+
+#Biblioteca
+library(IntroCompFinR)
+library(tidyquant)
+library(quadprog)
+library(dplyr)
+library(stringr)
+library(PortfolioAnalytics)
+library(DEoptim)
+library(ROI)
+require(ROI.plugin.glpk)
+require(ROI.plugin.quadprog)
+library(mvtnorm)
+
+
+#library(fAssets)
+#library(fPortfolio)
+#Leitura de dados
+rm(list = ls())
+
+minESGScore = 0.5
+
+# tickers = c("WEGE3", "PETR4", "BRFS3", "SUZB3", "MGLU3", "VALE3",
+#            "BRKM5")
+
+tickers = c("ABEV3","B3SA3","BBAS3","BBDC3","BBSE3","BPAC11",
+            "BRAP4","BRDT3","BRFS3","BRKM5","BRML3","BTOW3","CCRO3","CIEL3","CMIG4",
+            "COGN3","CPFE3","CRFB3","CSAN3","EGIE3",
+            #     "ELET3","EMBR3","ENGI11","EQTL3","GGBR4",
+            "ELET3","EMBR3", "EQTL3","GGBR4",
+            "GNDI3","GOAU4","HYPE3","IRBR3","ITSA4",
+            "ITUB4","JBSS3","KLBN11","LAME4","LREN3","MGLU3","MULT3",
+            "PCAR3","PETR3","RADL3","RAIL3","RENT3",
+            "SANB11","SBSP3","SULA11","SUZB3","UGPA3",
+            "VALE3","WEGE3")
+
+
+nativosYahoo = length(tickers)
+
+tickers_SA = tickers
+
+for (i in 1:nativosYahoo) {
+  tickers_SA[i] = str_c(tickers_SA[i], ".SA")
+}
+
+data_ini = "2019-01-01"
+data_end = "2020-12-31"
+
+getYahoo = FALSE
+
+if(getYahoo==TRUE){
+  
+  getSymbols("^BVSP",
+             from = data_ini,
+             to = data_end)
+  pricesIbov <- tq_get("^BVSP",
+                       from = data_ini,
+                       to = data_end,
+                       get = "stock.prices")
+  
+  getSymbols(tickers_SA,
+             from = data_ini,
+             to = data_end)
+  pricesYahoo <- tq_get(tickers_SA,
+                        from = data_ini,
+                        to = data_end,
+                        get = "stock.prices")
+  
+  #SALVE DATAFRAME em R
+  #pricesYahoo SAVE
+  save(pricesYahoo,file="C:\\Afranc\\Prospectos\\PIBICPIBITI\\2020\\pricesYahoo.Rda")
+  
+  save(pricesIbov,file="C:\\Afranc\\Prospectos\\PIBICPIBITI\\2020\\pricesIbov.Rda")
+  
+} else {
+  load("C:\\Afranc\\Prospectos\\PIBICPIBITI\\2020\\pricesYahoo.Rda")
+  load("C:\\Afranc\\Prospectos\\PIBICPIBITI\\2020\\pricesIbov.Rda")
+}
+
+#pricesYahoo LOAD
+
+
+pricesYahoo$date = as.Date(pricesYahoo$date,"%d/%m/%Y")
+pricesYahooTab = pricesYahoo %>% filter(pricesYahoo$symbol == tickers_SA[1]) %>% select(date, adjusted)
+
+for (i in 2:nativosYahoo) {
+  pricesYahooTabAux = pricesYahoo %>% filter(pricesYahoo$symbol == tickers_SA[i]) %>% select(adjusted)
+  pricesYahooTab = bind_cols(pricesYahooTab, pricesYahooTabAux)
+}
+
+nchangenames = nativosYahoo + 1
+names(pricesYahooTab)[2:nchangenames] = tickers
+pricesYahooTab = na.omit(pricesYahooTab)
+
+pricesIbov$date = as.Date(pricesIbov$date,"%d/%m/%Y")
+nlinhas1 = length(pricesYahooTab$date)
+pricesIbov1 = pricesIbov %>% filter(pricesIbov$date == pricesYahooTab$date[1]) %>% select(date, adjusted)
+for (i in 2:nlinhas1){
+  pricesIbov1aux = pricesIbov %>% filter(pricesIbov$date == pricesYahooTab$date[i]) %>% select(date, adjusted)
+  pricesIbov1 = bind_rows(pricesIbov1, pricesIbov1aux)
+}
+
+#entPrecos = read.csv("C:\\Afranc\\Prospectos\\PIBICPIBITI\\2020\\DadosTeste.csv", head = T, sep <- ";", dec = ",")
+#entPrecos = read.csv("D:\\Precos.csv", head = T, sep <- ";", dec = ",")
+
+entBD_Indices = read.csv("C:\\Afranc\\Prospectos\\PIBICPIBITI\\2020\\BD_IndicesV3.csv", head = T, sep <- ";", dec = ",")
+entIndTickers = entBD_Indices %>% filter(entBD_Indices$Codigo == tickers[1])
+
+for (i in 2:nativosYahoo) {
+  entIndTickersAux = entBD_Indices %>% filter(entBD_Indices$Codigo == tickers[i])
+  entIndTickers = bind_rows(entIndTickers, entIndTickersAux)
+}
+
+scorSust = as.numeric(entIndTickers$ScoreSustainalytics)
+maxSustainalytics = max(scorSust)
+minSustainalytics = min(scorSust)
+rangeScoreSust = maxSustainalytics - minSustainalytics
+
+esg_score = matrix(0,nativosYahoo, 1)
+sust_score = matrix(0,nativosYahoo, 1)
+for (i in 1:nativosYahoo) {
+  #  esg_score[i] = (entIndTickers$ICO2[i]+entIndTickers$ISE[i])/2
+  sust_score[i] = (as.numeric(entIndTickers$ScoreSustainalytics[i])-minSustainalytics)/rangeScoreSust
+}
+esg_score = sust_score
+
+
+entPrecos = pricesYahooTab
+
+#Inicializa matriz
+nlinhas = length(entPrecos$date)-1
+#nlinhas = length(entPrecos$ï..Data)-1
+#nlinhas = length(entPrecos$Data)-1
+nativos = length(entPrecos)-1
+
+#Calcula retornos
+
+retornos = matrix(0,nlinhas, nativos)
+
+df_precos = entPrecos[-c(1)]
+precos = as.matrix(df_precos)
+
+#Calcula retornos
+for (i in 1:nlinhas) {
+  aux = i+1
+  for (j in 1:nativos){
+    retornos[i,j] = as.numeric(precos[aux,j]) / as.numeric(precos[i,j]) - 1
+  }
+}
+
+retIbov = matrix(0,nlinhas,1)
+df_ibov = pricesIbov1[-c(1)]
+ibov_val = as.matrix(df_ibov)
+
+for (i in 1:nlinhas) {
+  aux = i+1
+  retIbov[i] = as.numeric(ibov_val[aux]) / as.numeric(ibov_val[i]) - 1
+}
+
+#==============================================================================
+#Define janela de dados para estimar retornos esperados e matriz de covariância
+#Janela definida como uma fração dos dados totais
+PrimPartJanela = 0.25
+
+janEst = floor(PrimPartJanela * nlinhas)
+#==============================================================================
+
+x = retIbov[1:janEst,1]
+
+coef_si = matrix(0,nativos,2)
+resid_si = matrix(0,janEst,nativos)
+
+for (i in 1:nativos){
+  y = retornos[1:janEst,i]
+  df_reg = bind_cols(as.data.frame(x), as.data.frame(y))
+  r_si = lm(df_reg$y ~ df_reg$x)
+  coef_si[i,1] = r_si$coefficients[1]
+  coef_si[i,2] = r_si$coefficients[2]
+  resid_si[1:janEst,i] = r_si$residuals
+}
+
+
+#Calcula media dos retornos
+medRet = matrix(0,nativos,1)
+medRet_ForaJan = matrix(0,nativos,1)
+
+for (i in 1:nativos){
+  medRet[i,1] = mean(retornos[1:janEst,i])
+  medRet_ForaJan[i,1] = mean(retornos[janEst:nlinhas,i])
+}
+
+#Calcula matriz covariancia retornos historicos
+covmatrix = cov(retornos[1:janEst,1:nativos])
+covmatrix_ForaJan = cov(retornos[janEst:nlinhas,1:nativos])
+
+#Calcula retornos e matriz de covariancia com modelo single index
+resp_ibov = mean(retIbov[1:janEst,1])
+resp_si = matrix(0,nativos,1)
+for (i in 1:nativos){
+  resp_si[i,1] = coef_si[i,1] + coef_si[i,2]*resp_ibov
+}
+covmatrix_si = cov(resid_si)
+
+
+#Usa modelo single-index se chave_si=true
+#chave_si = "false"
+chave_si = "true"
+
+if (chave_si == "true"){
+  medRet = resp_si
+  covmatrix = covmatrix_si
+}
+
+
+
+#==================IntroCompFinR
+short_selling = FALSE
+carteira_min_risco <- globalMin.portfolio(medRet, covmatrix, shorts = short_selling)
+carteira_min_risco
+
+fronteira = efficient.frontier(medRet, covmatrix, nport = 40, shorts = short_selling)
+fronteira
+attributes(fronteira)
+
+# Visualizaçao da saida
+
+plot(fronteira, plot.assets=TRUE, col="blue", pch=16)
+
+target.return = 0.7 * max(medRet)
+
+#target.risk = 0.05834095
+
+a = efficient.portfolio(medRet,covmatrix, target.return, shorts = FALSE)
+
+
+
+#==================
+#Usando quadprog
+A.Equality =  matrix(1,nrow=nativos,ncol=1)
+Amat <- cbind(A.Equality, medRet, diag(nativos), -diag(nativos))
+bvec <- c(1, target.return, rep(0, nativos), rep(-1, nativos))
+qp <- solve.QP(covmatrix, medRet, Amat, bvec, meq=2)
+qp$solution
+
+portReturn = qp$solution %*% medRet
+portRisk = (qp$solution %*% covmatrix %*% qp$solution)^0.5
+
+show('Port Return')
+show(portReturn)
+show('portRisk')
+show(portRisk)
+
+chaveReAmost=TRUE
+
+
+
+#===================================================================
+#Usando Resampling
+if (chaveReAmost==TRUE){
+  #semente das simulacoes
+  set.seed(0)
+  #numero de iteracoes de Monte Carlo
+  MC_iter = 100
+  #numero de portfolios para a fronteira eficiente
+  numPort = 10
+  #tamanho da amostra para o procedimento de reamostragem
+  #tamAmostra = 50
+  tamAmostra = 10*nativos
+  #restricoes de maximo e minimo na otimizacao
+  minAloc =0.0
+  maxAloc = 1
+  #grau maximo de aversao a risco
+  maxAversaoRisco = 2
+  
+  rs_pesos = data.frame()
+  
+  #Cria portfolio para a biblioteca PortfolioAnalytics
+  #Cria portfolio e define nome dos ativos
+  rs_nomes.ativos = tickers
+  #Define o portfolio
+  rs_pspec = portfolio.spec(assets=rs_nomes.ativos)
+  
+  #Adiciona restrições
+  rs_pspec = add.constraint(portfolio = rs_pspec, type = "weight_sum",min_sum=1, max_sum =1)
+  rs_pspec = add.constraint(portfolio = rs_pspec, type = "box", min=minAloc, max = maxAloc)
+  
+  #rs_pspec = add.constraint(portfolio = rs_pspec,type="group", groups=list(groupA=assetsClassGroupA), group_min = c(0), group_max=c(0.05))
+  
+  #Inicializa resampling
+  
+  #Vetor de aversao a risco
+  rAversion = matrix(0, numPort, 1)
+  for (j in 1:numPort){
+    rAversion[j,1] = j*maxAversaoRisco /numPort
+  }
+  
+  #Reamostragem
+  for (i in 1: MC_iter){
+    
+    #Distribuicao normal multivariada
+    mRetSC = rmvnorm(tamAmostra, medRet, covmatrix)
+    mc_R = ts(mRetSC)
+    
+    for (k in 1:numPort)
+    {
+      rs_qu = list()
+      #Maximiza utilidade (quadratica) usando pacote ROI
+      rs_qu = add.objective(portfolio=rs_pspec, type = "return", name="mean")
+      rs_qu = add.objective(portfolio = rs_qu, type = "risk", name="var", risk_aversion = rAversion[k,1])
+      
+      rs_opt_qu = optimize.portfolio(R=mc_R, portfolio = rs_qu,
+                                     optimize_method = "ROI",
+                                     trace=TRUE)
+      rs_pesos = rbind(rs_pesos, data.frame(iter=i, risk_aver=rAversion[k,1], nomes= rs_nomes.ativos, pesos=rs_opt_qu$weights))
+    }
+  }
+  
+  numiter = MC_iter*numPort
+  
+  # df_frontMC = rs_pesos %>% group_by(iter,risk_aver) %>%
+  #   summarize(risco=pesos%*%covmatrix%*%pesos, retorno=pesos%*%medRet, portESG_Score = pesos%*%esg_score) %>% ungroup()
+  #
+  # df_frontMC$ids =c(1:numiter)
+  
+  #hist(df_frontMC$portESG_Score)
+  
+  #####df_frontMC1 = filter(df_frontMC, portESG_Score >= minESGScore)
+  
+  #Confere
+  #=======================================================================
+  # auxM = matrix(NA,1,length(rs_nomes.ativos))
+  # groupPesos = data.frame(auxM)
+  # colnames(groupPesos) = rs_nomes.ativos
+  #
+  # val_aux = matrix(0,1,nativos)
+  # colnames(val_aux) = rs_nomes.ativos
+  # for (i in 1:MC_iter ){
+  #   for (j in 1:numPort){
+  #     for (k in 1: nativos){
+  #       val_aux[1,k] = as.numeric(filter(rs_pesos, nomes==rs_nomes.ativos[k] & iter==i & risk_aver==rAversion[j]) %>% select(pesos))
+  #     }
+  #     groupPesos = rbind(groupPesos,val_aux)
+  #   }
+  # }
+  #
+  # gPesos = groupPesos[-c(1),]
+  # gPesos$ids = ids=c(1:numiter)
+  #
+  # p_retornos = matrix(0,numiter,1)
+  # p_riscos = matrix(0,numiter,1)
+  # p_ESG = matrix(0,numiter,1)
+  # for (i in 1:numiter){
+  #   auxPesos=as.numeric(gPesos[i,1:nativos])
+  #   p_retornos[i]=auxPesos%*%medRet
+  #   p_riscos[i] = auxPesos %*% covmatrix %*% auxPesos
+  #   p_ESG[i] = auxPesos%*%esg_score
+  # }
+  #
+  # rs_out = data.frame(id=c(1:numiter), riscos = p_riscos, retornos = p_retornos, p_ESG_Score = p_ESG)
+  # Fim de confere========================================================
+  
+  #Une dados
+  #df_RSout = df_frontMC %>% left_join(gPesos) %>% group_by(ids)
+  #df_RSoutESG = filter(df_RSout, portESG_Score >= minESGScore)
+  
+  df_frontMC2 = rs_pesos %>% group_by(iter,risk_aver) %>%
+    summarize(risco=pesos%*%covmatrix%*%pesos, retorno=pesos%*%medRet, portESG_Score = pesos%*%esg_score, ativos = rs_nomes.ativos,pesos = pesos) %>% ungroup()
+  
+  hist(df_frontMC2$portESG_Score)
+  
+  df_RSoutESG2 = filter(df_frontMC2, portESG_Score >= minESGScore)
+  
+  df_outMed = df_RSoutESG2 %>% group_by(risk_aver, ativos) %>% summarise(pesos = mean (pesos,na.rm = TRUE)) %>% ungroup()
+  
+  dfRet = data.frame(ativo=rs_nomes.ativos, retmedio=medRet)
+  dfESG = data.frame(ativo=rs_nomes.ativos, esg_score=esg_score)
+  saida = df_outMed %>% group_by(risk_aver) %>% summarize(risco=pesos%*%covmatrix%*%pesos, retorno=dfRet$retmedio %*% pesos, esg_sco = dfESG$esg_score %*% pesos )
+  retrisk_ratio = mean(((1+saida$retorno)^252-1) / (saida$risco*252)^(1/2))
+  
+  #Fora da amostra
+  dfRet_ForaJan = data.frame(ativo=rs_nomes.ativos, retmedio=medRet_ForaJan)
+  saida_ForaJan = df_outMed %>% group_by(risk_aver) %>% summarize(risco=pesos%*%covmatrix_ForaJan%*%pesos, retorno=dfRet_ForaJan$retmedio %*% pesos, esg_sco = dfESG$esg_score %*% pesos )
+  retrisk_ratio_ForaJan = mean(((1+saida_ForaJan$retorno)^252-1) / (saida_ForaJan$risco*252)^(1/2))
+  
+}
+
+show('retrisk_ratio')
+show(retrisk_ratio)
+
+show('retrisk_ratio_ForaJan')
+show(retrisk_ratio_ForaJan)
